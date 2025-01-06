@@ -1,40 +1,81 @@
-from flask import Flask, jsonify, request
-from flasgger import Swagger
+from flask import Flask, request, jsonify
 import pandas as pd
-from sklearn.cluster import KMeans
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from flasgger import Swagger
 
 app = Flask(__name__)
+swagger = Swagger(app)
 
-# Crear la instancia de Swagger y cargar el archivo YAML
-swagger = Swagger(app, template_file='swagger.yaml')
+@app.route('/upload_csv', methods=['POST'])
+def upload_csv():
+    """
+    Upload CSV and return products for promotion
+    ---
+    tags:
+      - Promotion API
+    parameters:
+      - name: file
+        in: formData
+        type: file
+        required: true
+        description: CSV file with product data
+    responses:
+      200:
+        description: List of products selected for promotion
+        schema:
+          type: array
+          items:
+            type: string
+    """
+    try:
+        # Load the CSV file
+        file = request.files['file']
+        df = pd.read_csv(file)
 
-# Cargar y procesar el CSV
-def process_csv(csv_file):
-    df = pd.read_csv(csv_file)
-    
-    # Filtrar y preparar los datos para el clustering
-    features = df[['ProductoPrecio', 'ProductoStock', 'TotalPedido', 'Cantidad']]
-    
-    # KMeans para seleccionar productos para la promoción (clusters)
-    kmeans = KMeans(n_clusters=3, random_state=0)
-    df['Cluster'] = kmeans.fit_predict(features)
-    
-    # Seleccionar productos de los clusters para la promoción
-    selected_products = df.groupby('Cluster').agg({
-        'ProductoNombre': 'first'  # Tomar el primer producto de cada cluster
-    }).reset_index()
-    
-    # Extraer los nombres de los productos seleccionados
-    return selected_products['ProductoNombre'].tolist()
+        # Ensure necessary columns are present
+        required_columns = [
+            'Id', 'Nombre', 'Descripcion', 'Precio', 'CostoUnitario', 
+            'VentasHistoricas', 'FechaUltimaVenta', 'Stock', 'DescuentoMaxPermitido', 
+            'MargenGanancia', 'IdCategoria']
+        if not all(col in df.columns for col in required_columns):
+            return jsonify({"error": "Missing required columns in the CSV."}), 400
 
-# Ruta para recibir el archivo CSV y devolver los productos seleccionados
-@app.route('/api/promocion', methods=['POST'])
-def promocion():
-    file = request.files['file']
-    if file and file.filename.endswith('.csv'):
-        products = process_csv(file)
-        return jsonify({"productos": products}), 200
-    return jsonify({"error": "Archivo no válido. Asegúrese de que el archivo sea un CSV."}), 400
+        # Feature engineering for promotion criteria
+        df['TiempoSinVenta'] = (pd.Timestamp.now() - pd.to_datetime(df['FechaUltimaVenta'])).dt.days
+        df['PromocionRecomendada'] = (df['VentasHistoricas'] < 400) & \
+                                      (df['TiempoSinVenta'] > 15) & \
+                                      (df['MargenGanancia'] > df['DescuentoMaxPermitido']) & \
+                                      (df['Stock'] > 10)
+
+        # Train a simple classifier to refine promotions
+        features = ['VentasHistoricas', 'TiempoSinVenta', 'MargenGanancia', 'DescuentoMaxPermitido', 'Stock']
+        X = df[features]
+        y = df['PromocionRecomendada'].astype(int)
+
+        # Handle potential issues with nulls
+        X.fillna(0, inplace=True)
+
+        model = RandomForestClassifier(random_state=42)
+        model.fit(X, y)
+        df['PredictedPromotion'] = model.predict(X)
+
+        # Select products for promotion
+        promotion_products = df[df['PredictedPromotion'] == 1]
+
+        # Ensure there are 4 products with different IdCategoria
+        selected_products = []
+        selected_categories = set()
+
+        for index, row in promotion_products.iterrows():
+            if len(selected_categories) < 4:
+                if row['IdCategoria'] not in selected_categories:
+                    selected_products.append(row['Nombre'])
+                    selected_categories.add(row['IdCategoria'])
+
+        return jsonify(selected_products), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)

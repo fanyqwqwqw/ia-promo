@@ -1,27 +1,40 @@
 swagger: "2.0"
 info:
-  title: API de Promoción de Productos
-  description: Endpoint para seleccionar productos para una promoción basándose en clustering de productos.
+  description: "API to process CSV and recommend products for promotion using AI."
   version: "1.0.0"
+  title: "Promotion AI API"
+host: "localhost:5000"
+basePath: "/"
+tags:
+  - name: "Promotion API"
+    description: "Endpoints for generating product promotions"
+schemes:
+  - "http"
 paths:
-  /api/promocion:
+  /upload_csv:
     post:
-      summary: Seleccionar productos para la promoción
+      tags:
+        - "Promotion API"
+      summary: "Upload CSV and return products for promotion"
+      description: "Processes a CSV file and identifies products suitable for promotion."
+      consumes:
+        - "multipart/form-data"
+      produces:
+        - "application/json"
       parameters:
-        - name: file
-          in: formData
-          type: file
+        - name: "file"
+          in: "formData"
+          description: "CSV file with product data"
           required: true
-          description: Archivo CSV con la información de los productos
+          type: "file"
       responses:
         200:
-          description: Productos seleccionados para la promoción
+          description: "List of products selected for promotion"
           schema:
-            type: object
-            properties:
-              productos:
-                type: array
-                items:
-                  type: string
+            type: "array"
+            items:
+              type: "string"
         400:
-          description: Error de archivo no válido
+          description: "Bad Request - Missing required columns or invalid data"
+        500:
+          description: "Internal Server Error"
